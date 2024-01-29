@@ -6,8 +6,7 @@ on:
       - v*
 
 permissions:
-  contents: read
-  packages: write # Upload artefacts to release.
+  contents: write # Upload artefacts to release.
 
 jobs:
   build:
