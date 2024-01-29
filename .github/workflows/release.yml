@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: write # Upload artefacts to release.
 
 jobs:
   build:
@@ -35,3 +36,5 @@ jobs:
         PRODUCTION_AWS_ACCESS_KEY_ID: ${{ secrets.PRODUCTION_AWS_ACCESS_KEY_ID }}
         PRODUCTION_AWS_SECRET_ACCESS_KEY: ${{ secrets.PRODUCTION_AWS_SECRET_ACCESS_KEY }}
         PRODUCTION_AWS_S3_BUCKET: ${{ secrets.PRODUCTION_AWS_S3_BUCKET }}
+
+    - run: make upload-gh
