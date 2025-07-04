@@ -5,13 +5,12 @@ on:
     tags:        
       - v*
 
-permissions:
-  contents: write # Upload artefacts to release.
-  id-token: write # required by read-vault-secrets.
-
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Upload artefacts to release.
+      id-token: write # required by read-vault-secrets.
     steps:
     - name: Checkout code
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -56,3 +55,89 @@ jobs:
     # - run: make upload-gh
     #   env:
     #       GH_TOKEN: ${{ github.token }}
+
+  obs-release:
+    needs: release
+    runs-on: ubuntu-latest
+    container:
+      image: opensuse/tumbleweed
+    permissions:
+      contents: read
+      # TODO: replace GH secrets with read-vault-secrets
+      # id-token: write # required by read-vault-secrets. 
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - name: Set versioning and channel
+      run: |
+        if [[ "${NEW_VERSION}" == *"production"* ]]; then
+            echo "CHANNEL=stable" >> $GITHUB_ENV
+            echo "FILTER=production" >> $GITHUB_ENV
+        else
+            echo "CHANNEL=dev" >> $GITHUB_ENV
+            echo "FILTER=testing" >> $GITHUB_ENV
+        fi
+      env:
+        NEW_VERSION: ${{ github.ref_name }}
+
+    - name: Install dependencies
+      run: |
+        zypper in -y osc gh sudo vim awk \
+            obs-service-go_modules obs-service-tar_scm \
+            obs-service-set_version obs-service-recompress \
+            obs-service-format_spec_file obs-service-download_files
+
+    - name: Checkout OBS package
+      # TODO: replace pjbgf with rancher
+      uses: pjbgf/ecm-distro-tools/actions/obs-checkout@obs-submit-request
+      with:
+        package-name: rancher-selinux
+        upstream-project: home:pgomes:rancher:${{ env.CHANNEL }}
+        target-project: home:rst-bot:${{ env.CHANNEL }}
+        obs-config: ${{ secrets.OBS_CONFIG }}
+
+    - name: Set OBS config
+      shell: bash
+      run: |
+        mkdir -p ~/.config/osc
+        echo "${OBS_CONFIG}" > ~/.config/osc/oscrc
+      env:
+        OBS_CONFIG: ${{ secrets.OBS_CONFIG }}
+
+    - name: Update OBS Package
+      run: |
+        OLD_VERSION="$(gh release list --repo ${REPO_NAME} --limit 10 --jq '.[].tagName' --json tagName,createdAt | grep ${FILTER} | tail -n +2)"
+        
+        cd "home:rst-bot:${{ env.CHANNEL }}/${PKG_NAME}"
+        sed -i "s;${OLD_VERSION};${NEW_VERSION};g" _service
+        cat _service
+
+        osc service runall
+        osc diff
+
+        echo "remove ${PKG_NAME}-${OLD_VERSION#v}.tar.gz"
+        osc rm "${PKG_NAME}-${OLD_VERSION#v}.tar.gz"
+        echo "add ${PKG_NAME}-${NEW_VERSION#v}.tar.gz"
+        osc add "${PKG_NAME}-${NEW_VERSION#v}.tar.gz"
+
+        # osc build
+
+        awk 'NR==2,/^-------------------------------------------------------------------$/' "${PKG_NAME}.changes" | \
+        tail -n +3 | head -n -1 > commit-msg
+      
+        cat commit-msg
+        osc commit --file commit-msg
+
+        osc submitrequest -m "version update to ${NEW_VERSION}"
+      env:
+        PKG_NAME: rancher-selinux
+        NEW_VERSION: ${{ github.ref_name }}
+        GH_TOKEN: ${{ github.token }}
+        REPO_NAME: ${{ github.repository }}
+
+    - name: Delete config
+      if: always()
+      shell: bash
+      run: |
+        rm -rf ~/.config/osc
